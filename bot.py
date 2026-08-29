@@ -5,13 +5,13 @@ import sqlite3
 import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, F
 from aiogram.types import Message, BusinessConnection, BusinessMessagesDeleted
 from aiogram.client.default import DefaultBotProperties
 
 # ========== НАСТРОЙКИ ==========
 API_TOKEN = os.getenv("API_TOKEN")
-ADMIN_ID = 8371473442 # ВСТАВЬ СВОЙ TELEGRAM ID
+ADMIN_ID = 8371473442  # ТВОЙ TELEGRAM ID
 
 # ========== ЛОГГИРОВАНИЕ ==========
 logging.basicConfig(level=logging.INFO)
@@ -74,12 +74,9 @@ async def on_business_connection(connection: BusinessConnection):
         f"Чат: {connection.user_id}"
     )
 
-@dp.business_message()
+@dp.message(F.business_connection_id.is_not(None))
 async def handle_business_message(message: types.Message):
     """Сохраняет все сообщения из бизнес-чатов"""
-    if not message.business_connection_id:
-        return
-    
     chat_id = str(message.chat.id)
     msg_id = message.message_id
     text = message.text or message.caption or "[НЕ ТЕКСТОВОЕ СООБЩЕНИЕ]"
@@ -96,7 +93,6 @@ async def handle_deleted_messages(deleted: BusinessMessagesDeleted):
         saved_text = get_message(chat_id, msg_id)
         
         if saved_text:
-            # Отправляем владельцу
             await bot.send_message(
                 ADMIN_ID,
                 f"🗑 <b>УДАЛЕНО СООБЩЕНИЕ</b>\n"
