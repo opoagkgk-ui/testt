@@ -9,9 +9,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
 
-# Правильные импорты для Business API
+# Правильные импорты для aiogram 3.2.0
 from aiogram.types.business_connection import BusinessConnection
 from aiogram.types.business_messages_deleted import BusinessMessagesDeleted
 
@@ -28,11 +27,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация бота
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+# Инициализация бота (без DefaultBotProperties)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Инициализация базы данных
