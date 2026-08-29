@@ -7,9 +7,13 @@ from typing import Optional
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, BusinessConnection, BusinessMessagesDeleted
+from aiogram.types import Message
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+
+# Правильные импорты для Business API
+from aiogram.types.business_connection import BusinessConnection
+from aiogram.types.business_messages_deleted import BusinessMessagesDeleted
 
 # ===== КОНФИГУРАЦИЯ (прямо в коде) =====
 BOT_TOKEN = "8817614938:AAGDxSTYBs1drVcROpcFGp0OxfJd55HOHiI"  # Тестовый токен
