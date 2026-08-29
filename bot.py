@@ -1,23 +1,20 @@
-# bot.py
 import asyncio
 import logging
 import sqlite3
 import os
 from datetime import datetime
+
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, F
+from aiogram.filters import Command
 from aiogram.types import Message, BusinessConnection, BusinessMessagesDeleted
 from aiogram.client.default import DefaultBotProperties
 
-# ========== НАСТРОЙКИ ==========
 API_TOKEN = os.getenv("API_TOKEN")
-ADMIN_ID = 8371473442  # ТВОЙ TELEGRAM ID
+ADMIN_ID = 8371473442
 
-# ========== ЛОГГИРОВАНИЕ ==========
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('messages.db')
     cur = conn.cursor()
@@ -34,17 +31,15 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_message(chat_id: str, message_id: int, text: str):
+def save_message(chat_id, message_id, text):
     conn = sqlite3.connect('messages.db')
     cur = conn.cursor()
-    cur.execute(
-        'INSERT OR REPLACE INTO messages (chat_id, message_id, text, date) VALUES (?, ?, ?, ?)',
-        (chat_id, message_id, text, datetime.now())
-    )
+    cur.execute('INSERT OR REPLACE INTO messages (chat_id, message_id, text, date) VALUES (?, ?, ?, ?)',
+                (chat_id, message_id, text, datetime.now()))
     conn.commit()
     conn.close()
 
-def get_message(chat_id: str, message_id: int):
+def get_message(chat_id, message_id):
     conn = sqlite3.connect('messages.db')
     cur = conn.cursor()
     cur.execute('SELECT text FROM messages WHERE chat_id = ? AND message_id = ?', (chat_id, message_id))
@@ -52,94 +47,52 @@ def get_message(chat_id: str, message_id: int):
     conn.close()
     return result[0] if result else None
 
-def delete_message(chat_id: str, message_id: int):
+def delete_message(chat_id, message_id):
     conn = sqlite3.connect('messages.db')
     cur = conn.cursor()
     cur.execute('DELETE FROM messages WHERE chat_id = ? AND message_id = ?', (chat_id, message_id))
     conn.commit()
     conn.close()
 
-# ========== ИНИЦИАЛИЗАЦИЯ ==========
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# ========== BUSINESS ХЕНДЛЕРЫ ==========
 @dp.business_connection()
 async def on_business_connection(connection: BusinessConnection):
     logger.info(f"Business подключение: {connection.connection_id}")
-    await bot.send_message(
-        ADMIN_ID,
-        f"🔗 <b>Business подключение установлено!</b>\n"
-        f"ID: {connection.connection_id}\n"
-        f"Чат: {connection.user_id}"
-    )
+    await bot.send_message(ADMIN_ID, f"🔗 Business подключение установлено!\nID: {connection.connection_id}")
 
-@dp.message(F.business_connection_id.is_not(None))
+@dp.message()
 async def handle_business_message(message: types.Message):
-    """Сохраняет все сообщения из бизнес-чатов"""
-    chat_id = str(message.chat.id)
-    msg_id = message.message_id
-    text = message.text or message.caption or "[НЕ ТЕКСТОВОЕ СООБЩЕНИЕ]"
-    
-    save_message(chat_id, msg_id, text)
-    logger.info(f"Сохранено: {chat_id} | {msg_id} | {text[:50]}")
+    if not message.business_connection_id:
+        return
+    save_message(str(message.chat.id), message.message_id, message.text or "[НЕ ТЕКСТ]")
+    logger.info(f"Сохранено: {message.chat.id} | {message.message_id}")
 
 @dp.business_messages_deleted()
 async def handle_deleted_messages(deleted: BusinessMessagesDeleted):
-    """Обработка удалённых сообщений"""
-    chat_id = str(deleted.chat.id)
-    
     for msg_id in deleted.message_ids:
-        saved_text = get_message(chat_id, msg_id)
-        
-        if saved_text:
-            await bot.send_message(
-                ADMIN_ID,
-                f"🗑 <b>УДАЛЕНО СООБЩЕНИЕ</b>\n"
-                f"Чат: {chat_id}\n"
-                f"Текст: {saved_text[:500]}\n"
-                f"Message ID: {msg_id}"
-            )
-            delete_message(chat_id, msg_id)
-            logger.info(f"Отправлено удаление: {chat_id} | {msg_id}")
-        else:
-            logger.warning(f"Сообщение {msg_id} не найдено в БД")
+        text = get_message(str(deleted.chat.id), msg_id)
+        if text:
+            await bot.send_message(ADMIN_ID, f"🗑 УДАЛЕНО:\n{text[:500]}")
+            delete_message(str(deleted.chat.id), msg_id)
 
-# ========== ОБЫЧНЫЕ КОМАНДЫ ==========
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.answer(
-        "🤖 <b>Добро пожаловать в BOBMOD!</b>\n\n"
-        "Это <b>тестовая версия</b>, предназначенная исключительно для тестеров.\n\n"
-        "📌 <b>Как работает:</b>\n"
-        "1. Подключи бота в <code>Настройки → Автоматизация чатов</code>\n"
-        "2. Бот будет сохранять ВСЕ сообщения из чатов\n"
-        "3. Если собеседник удалит сообщение — ты получишь его текст в этот чат\n\n"
-        "⚠️ <i>Функция удаления работает только в чатах, где бот подключён через автоматизацию</i>\n\n"
-        "🚀 <b>Тестируй!</b>"
-    )
+    await message.answer("🤖 Добро пожаловать в BOBMOD!\nТестовая версия.")
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
-    await message.answer(
-        "📖 <b>Помощь по BOBMOD</b>\n\n"
-        "Команды:\n"
-        "/start — Приветствие\n"
-        "/help — Эта справка\n\n"
-        "Сейчас доступна только <b>тестовая версия</b>.\n"
-        "Функционал будет расширяться."
-    )
+    await message.answer("/start — приветствие\n/help — помощь")
 
 @dp.message()
 async def echo(message: Message):
-    """Заглушка для обычных сообщений"""
     if not message.business_connection_id:
-        await message.answer("Используй команду /start")
+        await message.answer("Используй /start")
 
-# ========== ЗАПУСК ==========
 async def main():
     init_db()
-    logger.info("Бот запущен!")
+    logger.info("🚀 БОТ ЗАПУЩЕН!")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
