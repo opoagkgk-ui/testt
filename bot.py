@@ -26,7 +26,7 @@ from aiogram.types import (
 # bobmod TEST v0.2
 # =========================================================
 
-BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8817614938:AAGDxSTYBs1drVcROpcFGp0OxfJd55HOHiI"
 
 OWNER_ID = 8371473442
 
