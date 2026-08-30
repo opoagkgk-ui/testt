@@ -1,15 +1,21 @@
 import asyncio
-import html
 import logging
 import sqlite3
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.types import (
     Message,
     BusinessConnection,
     BusinessMessagesDeleted,
-    MessageEntity,
+)
+
+from aiogram.utils.formatting import (
+    Text,
+    Bold,
+    Code,
+    CustomEmoji,
 )
 
 
@@ -18,7 +24,12 @@ from aiogram.types import (
 # =========================================================
 
 BOT_TOKEN = "8817614938:AAGDxSTYBs1drVcROpcFGp0OxfJd55HOHiI"
+
 OWNER_ID = 8371473442
+
+TESTER_IDS = {
+    5158759132,
+}
 
 DB_PATH = "bobmod.db"
 
@@ -41,9 +52,11 @@ CUSTOM_EMOJI = {
 }
 
 
-# Обычные emoji-якоря.
-# Telegram заменит их на соответствующие Custom Emoji.
-EMOJI_ANCHORS = {
+# =========================================================
+# Обычные emoji-якоря
+# =========================================================
+
+EMOJI = {
     "ping": "🏓",
     "user": "👤",
     "id": "🆔",
@@ -76,7 +89,7 @@ dp = Dispatcher()
 
 
 # =========================================================
-# Database
+# DATABASE
 # =========================================================
 
 def get_connection():
@@ -160,14 +173,14 @@ def save_message(
     connection_id: str,
     chat_id: int,
     message_id: int,
-    sender_id: int | None,
-    sender_name: str | None,
-    sender_username: str | None,
-    text: str | None,
-    caption: str | None,
-    media_type: str | None,
-    media_file_id: str | None,
-    created_at: str
+    sender_id,
+    sender_name,
+    sender_username,
+    text,
+    caption,
+    media_type,
+    media_file_id,
+    created_at
 ):
     with get_connection() as conn:
 
@@ -289,99 +302,211 @@ def get_stats():
         return {
             "total": row["total"],
             "edited": row["edited"],
-            "deleted": row["deleted"]
+            "deleted": row["deleted"],
         }
 
 
 # =========================================================
-# Custom Emoji formatter
+# CUSTOM EMOJI HELPERS
 # =========================================================
 
-def make_entities(text: str):
+def emoji(key: str):
     """
-    Находит emoji-якоря в тексте и создаёт MessageEntity
-    type='custom_emoji' с соответствующим custom_emoji_id.
+    Возвращает CustomEmoji с обычным emoji-якорем.
 
-    Важно:
-    offsets Telegram считаются в UTF-16 code units.
+    Например:
+    emoji("ping")
+    ->
+    🏓 + custom_emoji_id
     """
 
-    entities = []
-
-    for key, anchor in EMOJI_ANCHORS.items():
-
-        custom_id = CUSTOM_EMOJI.get(key)
-
-        if not custom_id:
-            continue
-
-        start = 0
-
-        while True:
-
-            position = text.find(
-                anchor,
-                start
-            )
-
-            if position == -1:
-                break
-
-            # Python index -> UTF-16 offset
-            prefix = text[:position]
-
-            offset = len(
-                prefix.encode("utf-16-le")
-            ) // 2
-
-            length = len(
-                anchor.encode("utf-16-le")
-            ) // 2
-
-            entities.append(
-                MessageEntity(
-                    type="custom_emoji",
-                    offset=offset,
-                    length=length,
-                    custom_emoji_id=custom_id
-                )
-            )
-
-            start = position + len(anchor)
-
-    # Telegram ожидает сущности в порядке расположения
-    entities.sort(
-        key=lambda entity: entity.offset
+    return CustomEmoji(
+        EMOJI[key],
+        custom_emoji_id=CUSTOM_EMOJI[key]
     )
 
-    return entities
-
 
 # =========================================================
-# Send message with Custom Emoji
+# Отправка форматированного сообщения
 # =========================================================
 
-async def send_custom_message(
+async def send_formatted(
     chat_id: int,
-    text: str,
+    content: Text,
     business_connection_id: str | None = None
 ):
-    entities = make_entities(text)
+    kwargs = content.as_kwargs()
+
+    kwargs["chat_id"] = chat_id
+
+    if business_connection_id:
+        kwargs["business_connection_id"] = (
+            business_connection_id
+        )
 
     return await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        entities=entities,
-        business_connection_id=business_connection_id
+        **kwargs
     )
 
 
-async def business_reply(
+# =========================================================
+# Форматирование .help
+# =========================================================
+
+def build_help():
+    return Text(
+        emoji("success"),
+        " ",
+        Bold("bobmod TEST"),
+        "\n\n",
+
+        "Доступные команды:\n\n",
+
+        "• ",
+        Code(".help"),
+        " — помощь\n",
+
+        "• ",
+        Code(".info"),
+        " — информация о пользователе\n",
+
+        "• ",
+        Code(".ping"),
+        " — проверка работы",
+    )
+
+
+# =========================================================
+# Форматирование .ping
+# =========================================================
+
+def build_ping():
+    return Text(
+        emoji("ping"),
+        " ",
+        Bold("Pong!"),
+        "\n",
+
+        "🤖 bobmod работает",
+    )
+
+
+# =========================================================
+# Форматирование .info
+# =========================================================
+
+def build_info(message: Message):
+    """
+    ВАЖНО:
+
+    message.from_user = тот, кто отправил команду.
+    message.chat = собеседник Business-аккаунта.
+
+    Поэтому .info показывает именно A.
+    """
+
+    chat = message.chat
+
+    name_parts = []
+
+    if chat.first_name:
+        name_parts.append(chat.first_name)
+
+    if chat.last_name:
+        name_parts.append(chat.last_name)
+
+    name = " ".join(name_parts)
+
+    if not name:
+        name = "Не указан"
+
+    username = (
+        f"@{chat.username}"
+        if chat.username
+        else "Не указан"
+    )
+
+    return Text(
+        emoji("user"),
+        " ",
+        Bold("Информация"),
+        "\n\n",
+
+        emoji("id"),
+        " ",
+        Bold("ID:"),
+        " ",
+        Code(str(chat.id)),
+        "\n",
+
+        emoji("user"),
+        " ",
+        Bold("Имя:"),
+        " ",
+        name,
+        "\n",
+
+        emoji("username"),
+        " ",
+        Bold("Username:"),
+        " ",
+        username,
+    )
+
+
+# =========================================================
+# Форматирование /stats
+# =========================================================
+
+def build_stats():
+    stats = get_stats()
+
+    return Text(
+        emoji("stats"),
+        " ",
+        Bold("bobmod TEST v0.1"),
+        "\n\n",
+
+        emoji("messages"),
+        " ",
+        Bold("Сообщений:"),
+        " ",
+        Code(str(stats["total"])),
+        "\n",
+
+        emoji("edited"),
+        " ",
+        Bold("Редактировано:"),
+        " ",
+        Code(str(stats["edited"])),
+        "\n",
+
+        emoji("deleted"),
+        " ",
+        Bold("Удалено:"),
+        " ",
+        Code(str(stats["deleted"])),
+    )
+
+
+# =========================================================
+# Замена сообщения командой
+# =========================================================
+
+async def replace_command_message(
     message: Message,
-    text: str
+    content: Text
 ):
     """
-    Ответ именно от подключённого Business-аккаунта.
+    Основной механизм команд в Business-чате.
+
+    Вариант 1:
+    пытаемся изменить само сообщение команды.
+
+    Вариант 2:
+    если Telegram не позволяет изменить сообщение,
+    отправляем результат от имени Business-аккаунта
+    и удаляем исходную команду.
     """
 
     connection_id = message.business_connection_id
@@ -389,173 +514,92 @@ async def business_reply(
     if not connection_id:
         return
 
-    await send_custom_message(
+    kwargs = content.as_kwargs()
+
+    # -----------------------------------------------------
+    # Если у команды есть inline keyboard,
+    # Telegram не позволит редактировать такое
+    # Business-сообщение, если оно не было отправлено ботом.
+    # -----------------------------------------------------
+
+    has_inline_keyboard = (
+        message.reply_markup is not None
+    )
+
+    if not has_inline_keyboard:
+
+        try:
+
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                business_connection_id=connection_id,
+                **kwargs
+            )
+
+            logging.info(
+                "Command message edited | "
+                "chat=%s | message=%s",
+                message.chat.id,
+                message.message_id
+            )
+
+            return
+
+        except TelegramBadRequest as error:
+
+            logging.warning(
+                "Could not edit command message: %s",
+                error
+            )
+
+        except TelegramForbiddenError as error:
+
+            logging.warning(
+                "No permission to edit command message: %s",
+                error
+            )
+
+    # -----------------------------------------------------
+    # FALLBACK
+    # -----------------------------------------------------
+
+    # Отправляем результат от имени Business-аккаунта.
+    await send_formatted(
         chat_id=message.chat.id,
-        text=text,
+        content=content,
         business_connection_id=connection_id
     )
 
+    # Удаляем исходную команду.
+    try:
 
-# =========================================================
-# Helpers
-# =========================================================
-
-def get_sender(message: Message):
-
-    if not message.from_user:
-        return None, "Неизвестно", None
-
-    user = message.from_user
-
-    name = " ".join(
-        part
-        for part in [
-            user.first_name,
-            user.last_name
-        ]
-        if part
-    )
-
-    return (
-        user.id,
-        name or "Неизвестно",
-        user.username
-    )
-
-
-def get_media(message: Message):
-
-    if message.photo:
-        return (
-            "photo",
-            message.photo[-1].file_id
+        await bot.delete_message(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            business_connection_id=connection_id
         )
 
-    if message.video:
-        return (
-            "video",
-            message.video.file_id
+        logging.info(
+            "Command message deleted after fallback | "
+            "chat=%s | message=%s",
+            message.chat.id,
+            message.message_id
         )
 
-    if message.document:
-        return (
-            "document",
-            message.document.file_id
+    except TelegramBadRequest as error:
+
+        logging.warning(
+            "Could not delete command message: %s",
+            error
         )
 
-    if message.audio:
-        return (
-            "audio",
-            message.audio.file_id
+    except TelegramForbiddenError as error:
+
+        logging.warning(
+            "No permission to delete command message: %s",
+            error
         )
-
-    if message.voice:
-        return (
-            "voice",
-            message.voice.file_id
-        )
-
-    if message.animation:
-        return (
-            "animation",
-            message.animation.file_id
-        )
-
-    if message.sticker:
-        return (
-            "sticker",
-            message.sticker.file_id
-        )
-
-    return None, None
-
-
-# =========================================================
-# .help
-# =========================================================
-
-async def handle_help(message: Message):
-
-    await business_reply(
-        message,
-        (
-            "🤖 <b>bobmod TEST</b>\n\n"
-            "Доступные команды:\n\n"
-            "• <code>.help</code> — помощь\n"
-            "• <code>.info</code> — информация о пользователе\n"
-            "• <code>.ping</code> — проверка работы"
-        )
-    )
-
-
-# =========================================================
-# .ping
-# =========================================================
-
-async def handle_ping(message: Message):
-
-    await business_reply(
-        message,
-        (
-            "🏓 <b>Pong!</b>\n"
-            "🤖 bobmod работает"
-        )
-    )
-
-
-# =========================================================
-# .info
-# =========================================================
-
-async def handle_info(message: Message):
-
-    user = message.from_user
-
-    if not user:
-
-        await business_reply(
-            message,
-            "❌ Не удалось получить информацию о пользователе."
-        )
-
-        return
-
-    name = " ".join(
-        part
-        for part in [
-            user.first_name,
-            user.last_name
-        ]
-        if part
-    )
-
-    if not name:
-        name = "Не указан"
-
-    name = html.escape(name)
-
-    if user.username:
-        username = (
-            "@"
-            + html.escape(user.username)
-        )
-    else:
-        username = "Не указан"
-
-    text = (
-        "👤 <b>Информация</b>\n\n"
-        "🆔 ID: "
-        f"<code>{user.id}</code>\n"
-        "👤 Имя: "
-        f"{name}\n"
-        "🔗 Username: "
-        f"{username}"
-    )
-
-    await business_reply(
-        message,
-        text
-    )
 
 
 # =========================================================
@@ -581,32 +625,39 @@ async def business_connection_handler(
         is_enabled=connection.is_enabled
     )
 
+    # Владелец получает уведомление.
     if connection.user.id != OWNER_ID:
         return
 
     if connection.is_enabled:
 
-        await send_custom_message(
+        await send_formatted(
             chat_id=OWNER_ID,
-            text=(
-                "🤖 <b>bobmod TEST</b>\n\n"
-                "Business-подключение включено ✅"
+            content=Text(
+                "🤖 ",
+                Bold("bobmod TEST"),
+                "\n\n",
+                "Business-подключение включено ",
+                emoji("success"),
             )
         )
 
     else:
 
-        await send_custom_message(
+        await send_formatted(
             chat_id=OWNER_ID,
-            text=(
-                "🤖 <b>bobmod TEST</b>\n\n"
-                "Business-подключение отключено ❌"
+            content=Text(
+                "🤖 ",
+                Bold("bobmod TEST"),
+                "\n\n",
+                "Business-подключение отключено ",
+                emoji("error"),
             )
         )
 
 
 # =========================================================
-# New Business message
+# BUSINESS MESSAGE
 # =========================================================
 
 @dp.business_message()
@@ -614,7 +665,7 @@ async def business_message_handler(
     message: Message
 ):
 
-    # Только личные чаты
+    # Только личные диалоги.
     if message.chat.type != "private":
         return
 
@@ -623,15 +674,71 @@ async def business_message_handler(
     if not connection_id:
         return
 
-    sender_id, sender_name, sender_username = (
-        get_sender(message)
-    )
+    # -----------------------------------------------------
+    # Сохраняем сообщение в БД
+    # -----------------------------------------------------
 
-    media_type, media_file_id = (
-        get_media(message)
-    )
+    sender_id = None
+    sender_name = None
+    sender_username = None
 
-    # Сохраняем оригинал
+    if message.from_user:
+
+        sender_id = message.from_user.id
+
+        sender_name = " ".join(
+            part
+            for part in [
+                message.from_user.first_name,
+                message.from_user.last_name,
+            ]
+            if part
+        )
+
+        sender_username = (
+            message.from_user.username
+        )
+
+    media_type = None
+    media_file_id = None
+
+    if message.photo:
+
+        media_type = "photo"
+        media_file_id = (
+            message.photo[-1].file_id
+        )
+
+    elif message.video:
+
+        media_type = "video"
+        media_file_id = message.video.file_id
+
+    elif message.document:
+
+        media_type = "document"
+        media_file_id = message.document.file_id
+
+    elif message.audio:
+
+        media_type = "audio"
+        media_file_id = message.audio.file_id
+
+    elif message.voice:
+
+        media_type = "voice"
+        media_file_id = message.voice.file_id
+
+    elif message.animation:
+
+        media_type = "animation"
+        media_file_id = message.animation.file_id
+
+    elif message.sticker:
+
+        media_type = "sticker"
+        media_file_id = message.sticker.file_id
+
     save_message(
         connection_id=connection_id,
         chat_id=message.chat.id,
@@ -657,7 +764,10 @@ async def business_message_handler(
         message.message_id
     )
 
-    # Команды должны быть текстовыми
+    # -----------------------------------------------------
+    # Команды
+    # -----------------------------------------------------
+
     if not message.text:
         return
 
@@ -667,18 +777,41 @@ async def business_message_handler(
         .lower()
     )
 
+    # .help
     if command == ".help":
-        await handle_help(message)
 
-    elif command == ".ping":
-        await handle_ping(message)
+        await replace_command_message(
+            message,
+            build_help()
+        )
 
-    elif command == ".info":
-        await handle_info(message)
+        return
+
+    # .ping
+    if command == ".ping":
+
+        await replace_command_message(
+            message,
+            build_ping()
+        )
+
+        return
+
+    # .info
+    if command == ".info":
+
+        # Информация именно о собеседнике A,
+        # то есть о message.chat.
+        await replace_command_message(
+            message,
+            build_info(message)
+        )
+
+        return
 
 
 # =========================================================
-# Edited Business message
+# EDITED BUSINESS MESSAGE
 # =========================================================
 
 @dp.edited_business_message()
@@ -710,8 +843,9 @@ async def edited_business_message_handler(
 
         return
 
-    sender_name = html.escape(
-        row["sender_name"] or "Неизвестно"
+    sender_name = (
+        row["sender_name"]
+        or "Неизвестно"
     )
 
     sender_id = (
@@ -720,34 +854,47 @@ async def edited_business_message_handler(
     )
 
     if row["text"]:
+
         original_text = row["text"]
 
     elif row["caption"]:
+
         original_text = row["caption"]
 
     elif row["media_type"]:
+
         original_text = (
             f"[Медиа: {row['media_type']}]"
         )
 
     else:
+
         original_text = "[Без текста]"
 
-    original_text = html.escape(
-        original_text
+    alert = Text(
+        emoji("edited"),
+        " ",
+        Bold("Сообщение отредактировано"),
+        "\n\n",
+
+        Bold("Отправитель:"),
+        " ",
+        sender_name,
+        "\n",
+
+        Bold("ID:"),
+        " ",
+        Code(str(sender_id)),
+        "\n\n",
+
+        Bold("Исходный текст:"),
+        "\n",
+        original_text,
     )
 
-    alert = (
-        "✏️ <b>Сообщение отредактировано</b>\n\n"
-        f"Отправитель: {sender_name}\n"
-        f"ID: <code>{sender_id}</code>\n\n"
-        "Исходный текст:\n"
-        f"<blockquote>{original_text}</blockquote>"
-    )
-
-    await send_custom_message(
+    await send_formatted(
         chat_id=OWNER_ID,
-        text=alert
+        content=alert
     )
 
     mark_edited(
@@ -756,16 +903,9 @@ async def edited_business_message_handler(
         message.message_id
     )
 
-    logging.info(
-        "Edited message | "
-        "chat=%s | message=%s",
-        message.chat.id,
-        message.message_id
-    )
-
 
 # =========================================================
-# Deleted Business messages
+# DELETED BUSINESS MESSAGES
 # =========================================================
 
 @dp.deleted_business_messages()
@@ -790,8 +930,6 @@ async def deleted_business_messages_handler(
             message_id
         )
 
-        # Если бот не успел сохранить сообщение,
-        # его содержимое восстановить невозможно.
         if not row:
 
             logging.warning(
@@ -803,8 +941,9 @@ async def deleted_business_messages_handler(
 
             continue
 
-        sender_name = html.escape(
-            row["sender_name"] or "Неизвестно"
+        sender_name = (
+            row["sender_name"]
+            or "Неизвестно"
         )
 
         sender_id = (
@@ -813,45 +952,51 @@ async def deleted_business_messages_handler(
         )
 
         if row["text"]:
+
             original_text = row["text"]
 
         elif row["caption"]:
+
             original_text = row["caption"]
 
         elif row["media_type"]:
+
             original_text = (
                 f"[Медиа: {row['media_type']}]"
             )
 
         else:
+
             original_text = "[Без текста]"
 
-        original_text = html.escape(
-            original_text
+        alert = Text(
+            emoji("deleted"),
+            " ",
+            Bold("Сообщение удалено"),
+            "\n\n",
+
+            Bold("Отправитель:"),
+            " ",
+            sender_name,
+            "\n",
+
+            Bold("ID:"),
+            " ",
+            Code(str(sender_id)),
+            "\n\n",
+
+            Bold("Исходное содержимое:"),
+            "\n",
+            original_text,
         )
 
-        alert = (
-            "🗑️ <b>Сообщение удалено</b>\n\n"
-            f"Отправитель: {sender_name}\n"
-            f"ID: <code>{sender_id}</code>\n\n"
-            "Исходное содержимое:\n"
-            f"<blockquote>{original_text}</blockquote>"
-        )
-
-        await send_custom_message(
+        await send_formatted(
             chat_id=OWNER_ID,
-            text=alert
+            content=alert
         )
 
         mark_deleted(
             connection_id,
-            chat_id,
-            message_id
-        )
-
-        logging.info(
-            "Deleted message | "
-            "chat=%s | message=%s",
             chat_id,
             message_id
         )
@@ -869,22 +1014,85 @@ async def start_handler(
     if not message.from_user:
         return
 
-    if message.from_user.id != OWNER_ID:
+    user_id = message.from_user.id
+
+    # -----------------------------------------------------
+    # OWNER
+    # -----------------------------------------------------
+
+    if user_id == OWNER_ID:
+
+        content = Text(
+            "🤖 ",
+            Bold("bobmod TEST v0.1"),
+            "\n\n",
+
+            "Business-бот работает.",
+            "\n\n",
+
+            "Команды в Business-чатах:\n",
+
+            "• ",
+            Code(".help"),
+            "\n",
+
+            "• ",
+            Code(".info"),
+            "\n",
+
+            "• ",
+            Code(".ping"),
+            "\n\n",
+
+            "Команда ",
+            Code("/stats"),
+            " показывает статистику.",
+        )
+
+        await send_formatted(
+            chat_id=message.chat.id,
+            content=content
+        )
+
         return
 
-    await send_custom_message(
-        chat_id=OWNER_ID,
-        text=(
-            "🤖 <b>bobmod TEST v0.1</b>\n\n"
-            "Business-бот работает.\n\n"
-            "Команды в Business-чатах:\n"
-            "• <code>.help</code>\n"
-            "• <code>.info</code>\n"
-            "• <code>.ping</code>\n\n"
-            "Команда <code>/stats</code> показывает "
-            "статистику сохранённых сообщений."
+    # -----------------------------------------------------
+    # TESTER
+    # -----------------------------------------------------
+
+    if user_id in TESTER_IDS:
+
+        content = Text(
+            "🤖 ",
+            Bold("bobmod TEST"),
+            "\n\n",
+
+            "🧪 ",
+            Bold("Тестовый режим активирован."),
+            "\n\n",
+
+            "Ты добавлен в список тестеров.\n\n",
+
+            "Доступные команды:\n",
+
+            "• ",
+            Code(".help"),
+            "\n",
+
+            "• ",
+            Code(".info"),
+            "\n",
+
+            "• ",
+            Code(".ping"),
         )
-    )
+
+        await send_formatted(
+            chat_id=message.chat.id,
+            content=content
+        )
+
+        return
 
 
 # =========================================================
@@ -899,27 +1107,23 @@ async def stats_handler(
     if not message.from_user:
         return
 
-    if message.from_user.id != OWNER_ID:
+    user_id = message.from_user.id
+
+    # Только OWNER.
+    if user_id != OWNER_ID:
+
+        # Тестер и остальные пользователи
+        # ничего не получают.
         return
 
-    stats = get_stats()
-
-    await send_custom_message(
-        chat_id=OWNER_ID,
-        text=(
-            "📊 <b>bobmod TEST v0.1</b>\n\n"
-            "💬 Сообщений: "
-            f"<b>{stats['total']}</b>\n"
-            "✏️ Редактировано: "
-            f"<b>{stats['edited']}</b>\n"
-            "🗑️ Удалено: "
-            f"<b>{stats['deleted']}</b>"
-        )
+    await send_formatted(
+        chat_id=message.chat.id,
+        content=build_stats()
     )
 
 
 # =========================================================
-# Main
+# MAIN
 # =========================================================
 
 async def main():
@@ -945,9 +1149,11 @@ async def main():
 if __name__ == "__main__":
 
     try:
+
         asyncio.run(main())
 
     except KeyboardInterrupt:
+
         logging.info(
             "bobmod TEST stopped"
         )
